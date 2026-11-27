@@ -1,0 +1,59 @@
+version: "1.0"
+
+# Global gateway settings
+settings:
+  # Operation mode: "enforce" (block) or "audit" (log only)
+  mode: "enforce"
+  # Default policy if no rule matches: "deny" (Zero Trust) or "allow"
+  default_action: "deny"
+  # Rug Pull protection (pin tool description and schema hashes)
+  pinning:
+    enabled: true
+    lockfile: "./mcp-lock.json"
+    # Action on hash mismatch: "block" (disable tool) or "warn"
+    on_mismatch: "block"
+
+# Rules for tool list filtering (tools/list) and call validation (tools/call)
+rules:
+  - name: "allow-safe-file-reads"
+    # Tool name or glob pattern (e.g., "fs_*", "github__get_*")
+    tools: ["read_file", "list_directory"]
+    action: "allow"
+    # Argument validation using CEL (Common Expression Language)
+    conditions:
+      - expr: 'args.path.startsWith("/home/synt/workspace/test") && !args.path.contains("..")'
+        message: "Access allowed only within /home/synt/workspace/test without path traversal"
+      - expr: '!args.path.endsWith(".env") && !args.path.contains(".git/")'
+        message: "Reading .env and internal git files is blocked"
+
+  - name: "restrict-sql-queries"
+    tools: ["postgres__query"]
+    action: "allow"
+    conditions:
+      # Allow only SELECT queries (case-insensitive, ignores whitespace)
+      - expr: 'args.sql.matches("(?i)^\\s*SELECT\\b")'
+        message: "Only SELECT queries are allowed"
+      - expr: '!args.sql.matches("(?i)\\b(DROP|DELETE|UPDATE|INSERT|ALTER|TRUNCATE)\\b")'
+        message: "Database modification is blocked"
+
+  - name: "block-dangerous-commands"
+    tools: ["execute_command", "bash", "rm_*"]
+    action: "deny"
+    message: "System command execution is disabled by security policy"
+
+# Tool response filtering before sending to LLM (outbound stream)
+dlp:
+  enabled: true
+  # Action on secret detection: "redact" (replace with [REDACTED]) or "block" (reject entire response)
+  action: "redact"
+  # Built-in presets (implemented in core code)
+  presets:
+    - "aws_keys"
+    - "github_tokens"
+    - "private_keys"
+    - "jwt"
+  # User-defined regular expressions
+  custom_patterns:
+    - name: "internal_api_token"
+      regex: 'corp_live_[a-zA-Z0-9]{32}'
+      replacement: "[REDACTED_CORP_TOKEN]"
